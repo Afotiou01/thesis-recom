@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BookingArts – Event Recommender Demo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<style>
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  background: linear-gradient(135deg, #4f46e5, #020617);
+  color: #111827;
+}
+
+.container {
+  max-width: 1000px;
+  margin: auto;
+  padding: 32px 16px;
+}
+
+.card {
+  background: #f9fafb;
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.35);
+  margin-bottom: 24px;
+}
+
+h1 {
+  background: linear-gradient(to right,#4f46e5,#ec4899);
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+h2 { margin-top: 0; }
+
+label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  display: block;
+  margin-top: 12px;
+}
+
+input, select, button {
+  width: 100%;
+  padding: 10px;
+  margin-top: 6px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+}
+
+button {
+  margin-top: 18px;
+  background: linear-gradient(to right,#4f46e5,#6366f1);
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button:hover { filter: brightness(1.05); }
+
+.events {
+  margin-top: 16px;
+}
+
+.event {
+  background: white;
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 10px;
+  border-left: 4px solid #4f46e5;
+}
+
+.event-title {
+  font-weight: 700;
+}
+
+.event-meta {
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.score {
+  font-size: 0.85rem;
+  margin-top: 6px;
+  color: #374151;
+}
+
+.explain {
+  font-size: 0.8rem;
+  color: #6b7280;
+  font-style: italic;
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<div class="card">
+<h1>BookingArts Recommender</h1>
+<p>
+TikTok-style onboarding → Content + Context + Artist boost → Top-10 concert matches.<br>
+<strong>Scores are visible for research purposes.</strong>
+</p>
+</div>
+
+<div class="card">
+<h2>User Profile</h2>
+
+<label>Username</label>
+<input id="username" value="demo_user">
+
+<label>City</label>
+<select id="city">
+  <option>Nicosia</option>
+  <option>Limassol</option>
+  <option>Larnaca</option>
+  <option>Paphos</option>
+</select>
+
+<label>Music language</label>
+<select id="language">
+  <option value="lang_greek">Greek</option>
+  <option value="lang_english">English</option>
+  <option value="both">Both</option>
+</select>
+
+<label>Music tags</label>
+<select id="tags" multiple size="6">
+  <option value="rock">Rock</option>
+  <option value="pop">Pop</option>
+  <option value="jazz">Jazz</option>
+  <option value="electronic">Electronic</option>
+  <option value="techno">Techno</option>
+  <option value="laiko">Laiko</option>
+  <option value="entehno">Entehno</option>
+</select>
+
+<label>Favourite artists</label>
+<select id="artists" multiple size="5"></select>
+
+<button onclick="saveProfile()">Save Profile</button>
+</div>
+
+<div class="card">
+<h2>Get Recommendations</h2>
+
+<label>From date</label>
+<input type="date" id="from">
+
+<label>To date</label>
+<input type="date" id="to">
+
+<button onclick="getRecs()">Get Top 10 Events</button>
+
+<div class="events" id="results"></div>
+</div>
+
+</div>
+
+<script>
+const API = "http://127.0.0.1:8000";
+
+async function loadArtists() {
+  const res = await fetch(API + "/artist-options");
+  const data = await res.json();
+  const sel = document.getElementById("artists");
+  data.artists.forEach(a => {
+    const opt = document.createElement("option");
+    opt.value = a;
+    opt.textContent = a;
+    sel.appendChild(opt);
+  });
+}
+loadArtists();
+
+async function saveProfile() {
+  const tags = Array.from(document.getElementById("tags").selectedOptions).map(o => o.value);
+  const artists = Array.from(document.getElementById("artists").selectedOptions).map(o => o.value);
+
+  const lang = document.getElementById("language").value;
+  if (lang !== "both") tags.push(lang);
+  else tags.push("lang_greek","lang_english");
+
+  await fetch(API + "/user/save-profile", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({
+      username: username.value,
+      city: city.value,
+      tags: tags,
+      favorite_artists: artists
+    })
+  });
+  alert("Profile saved");
+}
+
+async function getRecs() {
+  const params = new URLSearchParams({
+    username: username.value,
+    date_from: from.value,
+    date_to: to.value
+  });
+
+  const res = await fetch(API + "/recommendations?" + params);
+  const data = await res.json();
+  const div = document.getElementById("results");
+  div.innerHTML = "";
+
+  data.results.forEach(ev => {
+    div.innerHTML += `
+      <div class="event">
+        <div class="event-title">${ev.title}</div>
+        <div class="event-meta">${ev.city} · ${ev.date}</div>
+        <div class="score">
+          Score: ${ev.score} |
+          CBF: ${ev.breakdown.cbf},
+          Context: ${ev.breakdown.context},
+          Artist boost: ${ev.breakdown.artist_boost}
+        </div>
+        <div class="explain">
+          Weighted formula: 0.6·CBF + 0.4·Context + Artist Boost
+        </div>
+      </div>`;
+  });
+}
+</script>
+
+</body>
+</html>

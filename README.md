@@ -1,2 +1,11 @@
 # thesis-recom
-This is a repository for my thesis recommender system for the University of Cyprus 
+
+Demo thesis project: concert recommender system (Content + Context + Artist boost)
+
+## Features
+- TikTok-style onboarding (user selects city, language, genres, favorite artists)
+- Admin page to add events (assign tags/language/artists from options)
+- API returns ranked events with score + explanation breakdown
+- SQLite database
+
+
