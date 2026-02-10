@@ -4,230 +4,292 @@
 <meta charset="UTF-8">
 <title>BookingArts – Event Recommender Demo</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-
 <style>
-body {
-  margin: 0;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  background: linear-gradient(135deg, #4f46e5, #020617);
-  color: #111827;
-}
-
-.container {
-  max-width: 1000px;
-  margin: auto;
-  padding: 32px 16px;
-}
-
-.card {
-  background: #f9fafb;
-  border-radius: 16px;
-  padding: 24px;
-  box-shadow: 0 20px 40px rgba(0,0,0,0.35);
-  margin-bottom: 24px;
-}
-
-h1 {
-  background: linear-gradient(to right,#4f46e5,#ec4899);
-  -webkit-background-clip: text;
-  color: transparent;
-}
-
-h2 { margin-top: 0; }
-
-label {
-  font-size: 0.9rem;
-  font-weight: 600;
-  display: block;
-  margin-top: 12px;
-}
-
-input, select, button {
-  width: 100%;
-  padding: 10px;
-  margin-top: 6px;
-  border-radius: 8px;
-  border: 1px solid #d1d5db;
-}
-
-button {
-  margin-top: 18px;
-  background: linear-gradient(to right,#4f46e5,#6366f1);
-  color: white;
-  border: none;
-  cursor: pointer;
-  font-weight: 600;
-}
-
-button:hover { filter: brightness(1.05); }
-
-.events {
-  margin-top: 16px;
-}
-
-.event {
-  background: white;
-  border-radius: 12px;
-  padding: 14px;
-  margin-bottom: 10px;
-  border-left: 4px solid #4f46e5;
-}
-
-.event-title {
-  font-weight: 700;
-}
-
-.event-meta {
-  font-size: 0.8rem;
-  color: #6b7280;
-}
-
-.score {
-  font-size: 0.85rem;
-  margin-top: 6px;
-  color: #374151;
-}
-
-.explain {
-  font-size: 0.8rem;
-  color: #6b7280;
-  font-style: italic;
-}
+body { margin:0; font-family:system-ui; background:linear-gradient(135deg,#4f46e5,#020617); color:#111827; }
+.container { max-width:1000px; margin:auto; padding:32px 16px; }
+.card { background:#f9fafb; border-radius:16px; padding:24px; box-shadow:0 20px 40px rgba(0,0,0,.35); margin-bottom:24px; }
+h1 { background:linear-gradient(to right,#4f46e5,#ec4899); -webkit-background-clip:text; color:transparent; }
+label { font-size:.9rem; font-weight:600; display:block; margin-top:12px; }
+input, select, button { width:100%; padding:10px; margin-top:6px; border-radius:8px; border:1px solid #d1d5db; }
+button { margin-top:18px; background:linear-gradient(to right,#4f46e5,#6366f1); color:#fff; border:none; cursor:pointer; font-weight:600; }
+.row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+@media (max-width:700px){ .row{ grid-template-columns:1fr; } }
+.event { background:#fff; border-radius:12px; padding:14px; margin-bottom:10px; border-left:4px solid #4f46e5; }
+.event-title { font-weight:700; }
+.event-meta { font-size:.8rem; color:#6b7280; }
+.score { font-size:.85rem; margin-top:6px; color:#374151; }
+.explain { font-size:.8rem; color:#6b7280; font-style:italic; margin-top:6px; }
+.badge { display:inline-block; padding:2px 8px; border-radius:999px; background:#eef2ff; color:#4338ca; font-size:.75rem; margin-right:6px; }
+small { color:#6b7280; }
 </style>
 </head>
-
 <body>
 <div class="container">
 
-<div class="card">
-<h1>BookingArts Recommender</h1>
-<p>
-TikTok-style onboarding → Content + Context + Artist boost → Top-10 concert matches.<br>
-<strong>Scores are visible for research purposes.</strong>
-</p>
-</div>
+  <div class="card">
+    <h1>BookingArts Recommender</h1>
+    <p>Onboarding → Content + Context + Artist boost → Top-10 matches. <strong>Scores visible for research.</strong></p>
+    <small id="apiStatus"></small>
+  </div>
 
-<div class="card">
-<h2>User Profile</h2>
+  <div class="card">
+    <h2>User Profile</h2>
 
-<label>Username</label>
-<input id="username" value="demo_user">
+    <div class="row">
+      <div>
+        <label>Username</label>
+        <input id="username" value="demo_user">
+      </div>
+      <div>
+        <label>City</label>
+        <select id="city">
+          <option>Nicosia</option>
+          <option>Limassol</option>
+          <option>Larnaca</option>
+          <option>Paphos</option>
+        </select>
+      </div>
+    </div>
 
-<label>City</label>
-<select id="city">
-  <option>Nicosia</option>
-  <option>Limassol</option>
-  <option>Larnaca</option>
-  <option>Paphos</option>
-</select>
+    <label>Music language</label>
+    <select id="language">
+      <option value="lang_greek">Greek</option>
+      <option value="lang_english">English</option>
+      <option value="both">Both</option>
+    </select>
 
-<label>Music language</label>
-<select id="language">
-  <option value="lang_greek">Greek</option>
-  <option value="lang_english">English</option>
-  <option value="both">Both</option>
-</select>
+    <label>Music tags</label>
+    <select id="tags" multiple size="10"></select>
+    <small>Hold Ctrl/Cmd to select multiple.</small>
 
-<label>Music tags</label>
-<select id="tags" multiple size="6">
-  <option value="rock">Rock</option>
-  <option value="pop">Pop</option>
-  <option value="jazz">Jazz</option>
-  <option value="electronic">Electronic</option>
-  <option value="techno">Techno</option>
-  <option value="laiko">Laiko</option>
-  <option value="entehno">Entehno</option>
-</select>
+    <label>Favourite artists</label>
+    <select id="artists" multiple size="6"></select>
 
-<label>Favourite artists</label>
-<select id="artists" multiple size="5"></select>
+    <button id="saveBtn" onclick="saveProfile()">Save Profile</button>
+    <small id="saveStatus"></small>
+  </div>
 
-<button onclick="saveProfile()">Save Profile</button>
-</div>
+  <div class="card">
+    <h2>Get Recommendations</h2>
 
-<div class="card">
-<h2>Get Recommendations</h2>
+    <div class="row">
+      <div>
+        <label>From date</label>
+        <input type="date" id="from">
+      </div>
+      <div>
+        <label>To date</label>
+        <input type="date" id="to">
+      </div>
+    </div>
 
-<label>From date</label>
-<input type="date" id="from">
+    <div style="margin-top:14px;">
+      <h3 style="margin:0 0 6px;">Tuning (for research)</h3>
 
-<label>To date</label>
-<input type="date" id="to">
+      <label>CBF weight: <span id="cbfVal">0.6</span></label>
+      <input type="range" id="w_cbf" min="0" max="1" step="0.05" value="0.6">
 
-<button onclick="getRecs()">Get Top 10 Events</button>
+      <label>Context weight: <span id="ctxVal">0.4</span></label>
+      <input type="range" id="w_context" min="0" max="1" step="0.05" value="0.4">
 
-<div class="events" id="results"></div>
-</div>
+      <label>Max Artist Boost: <span id="boostVal">0.3</span></label>
+      <input type="range" id="max_artist_boost" min="0" max="1" step="0.05" value="0.3">
+
+      <button onclick="saveWeights()">Save Weights</button>
+      <small id="weightsStatus"></small>
+    </div>
+
+    <button id="recBtn" onclick="getRecs()">Get Top 10 Events</button>
+    <div id="results"></div>
+  </div>
 
 </div>
 
 <script>
-const API = "http://127.0.0.1:8000";
+const API = "/api";
+const qs = (id) => document.getElementById(id);
+
+async function checkApi() {
+  try {
+    const res = await fetch(API + "/tag-options");
+    if (!res.ok) throw new Error("bad");
+    qs("apiStatus").textContent = "API connected.";
+  } catch {
+    qs("apiStatus").textContent = "API not reachable.";
+  }
+}
+
+async function loadTags() {
+  const sel = qs("tags");
+  sel.innerHTML = "";
+  const res = await fetch(API + "/tag-options");
+  const data = await res.json();
+  (data.tags || []).forEach(t => {
+    if (t === "lang_greek" || t === "lang_english") return;
+    const opt = document.createElement("option");
+    opt.value = t;
+    opt.textContent = t;
+    sel.appendChild(opt);
+  });
+}
 
 async function loadArtists() {
+  const sel = qs("artists");
+  sel.innerHTML = "";
   const res = await fetch(API + "/artist-options");
   const data = await res.json();
-  const sel = document.getElementById("artists");
-  data.artists.forEach(a => {
+  (data.artists || []).forEach(a => {
     const opt = document.createElement("option");
     opt.value = a;
     opt.textContent = a;
     sel.appendChild(opt);
   });
 }
-loadArtists();
+
+function selectedValues(selectEl) {
+  return Array.from(selectEl.selectedOptions).map(o => o.value);
+}
+
+function syncWeightLabels() {
+  qs("cbfVal").textContent = qs("w_cbf").value;
+  qs("ctxVal").textContent = qs("w_context").value;
+  qs("boostVal").textContent = qs("max_artist_boost").value;
+}
+
+["w_cbf","w_context","max_artist_boost"].forEach(id => {
+  document.addEventListener("input", (e) => {
+    if (e.target && e.target.id === id) syncWeightLabels();
+  });
+});
+
+async function loadWeights() {
+  const res = await fetch(API + "/config/weights");
+  const w = await res.json();
+  qs("w_cbf").value = w.w_cbf;
+  qs("w_context").value = w.w_context;
+  qs("max_artist_boost").value = w.max_artist_boost;
+  syncWeightLabels();
+}
+
+async function saveWeights() {
+  qs("weightsStatus").textContent = "";
+
+  const w_cbf = parseFloat(qs("w_cbf").value);
+  const w_context = parseFloat(qs("w_context").value);
+  const max_artist_boost = parseFloat(qs("max_artist_boost").value);
+
+  if (Math.abs((w_cbf + w_context) - 1.0) > 1e-6) {
+    qs("weightsStatus").textContent = "CBF + Context must equal 1.0";
+    return;
+  }
+
+  const res = await fetch(API + "/config/weights", {
+    method: "PUT",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ w_cbf, w_context, max_artist_boost })
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    qs("weightsStatus").textContent = "Error: " + (err.detail || "Could not save weights.");
+    return;
+  }
+
+  qs("weightsStatus").textContent = "Weights saved.";
+}
 
 async function saveProfile() {
-  const tags = Array.from(document.getElementById("tags").selectedOptions).map(o => o.value);
-  const artists = Array.from(document.getElementById("artists").selectedOptions).map(o => o.value);
+  qs("saveStatus").textContent = "";
 
-  const lang = document.getElementById("language").value;
-  if (lang !== "both") tags.push(lang);
-  else tags.push("lang_greek","lang_english");
+  const username = qs("username").value.trim();
+  const city = qs("city").value;
+  if (!username) { qs("saveStatus").textContent = "Enter a username."; return; }
 
-  await fetch(API + "/user/save-profile", {
-    method: "POST",
-    headers: {"Content-Type":"application/json"},
-    body: JSON.stringify({
-      username: username.value,
-      city: city.value,
-      tags: tags,
-      favorite_artists: artists
-    })
-  });
-  alert("Profile saved");
+  const tags = selectedValues(qs("tags"));
+  const favArtists = selectedValues(qs("artists"));
+  const lang = qs("language").value;
+
+  const finalTags = ["concert", ...tags];
+  if (lang !== "both") finalTags.push(lang);
+  else finalTags.push("lang_greek","lang_english");
+
+  qs("saveBtn").disabled = true;
+  try {
+    const res = await fetch(API + "/users/profile", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ username, city, tags: finalTags, favorite_artists: favArtists })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      qs("saveStatus").textContent = "Error: " + (err.detail || "Could not save profile.");
+      return;
+    }
+
+    qs("saveStatus").textContent = "Profile saved.";
+    alert("Profile saved");
+    await loadArtists();
+  } finally {
+    qs("saveBtn").disabled = false;
+  }
 }
 
 async function getRecs() {
-  const params = new URLSearchParams({
-    username: username.value,
-    date_from: from.value,
-    date_to: to.value
-  });
+  const username = qs("username").value.trim();
+  if (!username) { alert("Enter username first."); return; }
 
-  const res = await fetch(API + "/recommendations?" + params);
-  const data = await res.json();
-  const div = document.getElementById("results");
-  div.innerHTML = "";
+  const params = new URLSearchParams();
+  params.set("username", username);
 
-  data.results.forEach(ev => {
-    div.innerHTML += `
-      <div class="event">
-        <div class="event-title">${ev.title}</div>
-        <div class="event-meta">${ev.city} · ${ev.date}</div>
-        <div class="score">
-          Score: ${ev.score} |
-          CBF: ${ev.breakdown.cbf},
-          Context: ${ev.breakdown.context},
-          Artist boost: ${ev.breakdown.artist_boost}
+  const f = qs("from").value;
+  const t = qs("to").value;
+  if (f) params.set("date_from", f);
+  if (t) params.set("date_to", t);
+
+  qs("recBtn").disabled = true;
+  try {
+    const res = await fetch(API + "/recommendations?" + params.toString());
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.detail || "Could not fetch recommendations.");
+      return;
+    }
+
+    const data = await res.json();
+    const results = data.results || [];
+    const div = qs("results");
+    div.innerHTML = "";
+
+    if (!results.length) {
+      div.innerHTML = `<div class="event"><div class="event-title">No events found.</div></div>`;
+      return;
+    }
+
+    results.forEach(ev => {
+      div.innerHTML += `
+        <div class="event">
+          <div class="event-title">${ev.title}</div>
+          <div class="event-meta">${ev.city} · ${ev.date}</div>
+          <div class="score">
+            <span class="badge">Score ${ev.score}</span>
+            CBF: ${ev.breakdown.cbf}, Context: ${ev.breakdown.context}, Artist boost: ${ev.breakdown.artist_boost}
+          </div>
+          <div class="explain">${ev.explanation || ""}</div>
         </div>
-        <div class="explain">
-          Weighted formula: 0.6·CBF + 0.4·Context + Artist Boost
-        </div>
-      </div>`;
-  });
+      `;
+    });
+  } finally {
+    qs("recBtn").disabled = false;
+  }
 }
-</script>
 
+(async function init(){
+  await checkApi();
+  await loadTags();
+  await loadArtists();
+  await loadWeights();
+})();
+</script>
 </body>
 </html>

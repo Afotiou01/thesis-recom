@@ -1,29 +1,51 @@
-# this file adds some initial events if database is empty
+from __future__ import annotations
 
-from database import SessionLocal, Event, init_db
+from datetime import date
+from sqlalchemy.exc import IntegrityError
 
-def seed():
-    init_db()
+from database import SessionLocal, Event, RecommenderConfig
+
+
+def seed() -> None:
+    """Seed default weights + a sample event (safe to run multiple times)."""
     db = SessionLocal()
     try:
-        if db.query(Event).first():
-            return
+        cfg = db.query(RecommenderConfig).first()
+        if not cfg:
+            cfg = RecommenderConfig(
+                w_cbf="0.6",
+                w_context="0.4",
+                max_artist_boost="0.3",
+                w_language="0.15",
+            )
+            db.add(cfg)
+            db.commit()
 
         sample = [
-            Event(title="Limassol Rock Festival", city="Limassol", date="2026-03-10", language="english",
-                  tags="concert,lang_english,rock,live,festival", artists="Imagine Dragons,Arctic Monkeys"),
-            Event(title="Nicosia Techno Night", city="Nicosia", date="2026-03-15", language="english",
-                  tags="concert,lang_english,electronic,techno,club", artists="Charlotte de Witte"),
-            Event(title="Paphos Greek Night", city="Paphos", date="2026-03-20", language="greek",
-                  tags="concert,lang_greek,laiko,live", artists="Antonis Remos"),
-            Event(title="Larnaca Jazz Evening", city="Larnaca", date="2026-03-22", language="english",
-                  tags="concert,lang_english,jazz,soul,live", artists="Local Jazz Quartet"),
+            {
+                "title": "Limassol Rock Festival",
+                "city": "Limassol",
+                "date": date(2026, 3, 10),
+                "language": "english",
+                "tags": ["concert", "lang_english", "rock", "live", "festival"],
+                "artists": ["Imagine Dragons", "Arctic Monkeys"],
+            },
         ]
-        for e in sample:
-            db.add(e)
-        db.commit()
+
+        for item in sample:
+            ev = Event(
+                title=item["title"],
+                city=item["city"],
+                date=item["date"],
+                language=item["language"],
+            )
+            ev.set_tags(item["tags"])
+            ev.set_artists(item["artists"])
+
+            db.add(ev)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
     finally:
         db.close()
-
-if __name__ == "__main__":
-    seed()

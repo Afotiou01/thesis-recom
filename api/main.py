@@ -1,20 +1,26 @@
-# this file runs the FastAPI server and exposes endpoints for:
-# - user profile creation
-# - admin event creation
-# - recommendations
+from __future__ import annotations
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+import random
+from datetime import date
 from typing import List, Optional
 
-from .database import SessionLocal, init_db, UserProfile, Event
-from .recommender import parse_csv, in_date_window, score_event
-from .seed import seed
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field, ConfigDict
 
-app = FastAPI(title="thesis-recom API")
+from database import (
+    SessionLocal,
+    init_db,
+    UserProfile,
+    Event,
+    RecommenderConfig,
+    RecommendationLog,
+)
+from recommender import in_date_window, score_event
+from seed import seed
 
-# allow frontend pages to call the API
+app = FastAPI(title="Thesis-Recom API", version="3.0.0")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,153 +29,375 @@ app.add_middleware(
 )
 
 
-# fixed tag options used by admin + user UI
-TAG_OPTIONS = [
-    "concert",
-    "lang_greek",
-    "lang_english",
-    "laiko",
-    "entehno",
-    "rebetiko",
-    "greek_pop",
-    "greek_rock",
-    "rock",
-    "pop",
-    "indie",
-    "alternative",
-    "metal",
-    "jazz",
-    "soul",
-    "rnb",
-    "electronic",
-    "edm",
-    "techno",
-    "house",
-    "latin",
-    "reggaeton",
-    "reggae",
-    "classical",
-    "acoustic",
-    "instrumental",
-    "live",
-    "festival",
-    "club",
-]
+# ----------------------------
+# DB dependency
+# ----------------------------
+
+def get_db():
+    """Provide a DB session per request."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def _clean_list(values: List[str]) -> List[str]:
+    """Trim, remove empty entries, deduplicate case-insensitively."""
+    seen = set()
+    out = []
+    for v in values or []:
+        s = (v or "").strip()
+        if not s:
+            continue
+        k = s.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(s)
+    return out
+
+
+def _get_cfg(db) -> RecommenderConfig:
+    """Ensure there is a config row and return it."""
+    cfg = db.query(RecommenderConfig).first()
+    if not cfg:
+        cfg = RecommenderConfig(w_cbf="0.6", w_context="0.4", max_artist_boost="0.3", w_language="0.15")
+        db.add(cfg)
+        db.commit()
+        db.refresh(cfg)
+    return cfg
+
+
+def interleave_random(
+    ranked: list[dict],
+    random_pool: list[dict],
+    top_n: int,
+    random_every: int = 5,
+    random_count: int = 1,
+    seed_key: str = "",
+) -> list[dict]:
+    """
+    Diversification strategy:
+      Take `random_every` ranked items then insert `random_count` random items from random_pool, repeating.
+    """
+    if top_n <= 0:
+        return []
+
+    rnd = random.Random(seed_key)  # stable randomness per request (reproducible)
+    ranked_copy = ranked[:]
+    pool_copy = random_pool[:]
+    rnd.shuffle(pool_copy)
+
+    out: list[dict] = []
+    i = 0
+
+    while len(out) < top_n and (i < len(ranked_copy) or pool_copy):
+        for _ in range(random_every):
+            if len(out) >= top_n or i >= len(ranked_copy):
+                break
+            out.append(ranked_copy[i])
+            i += 1
+
+        for _ in range(random_count):
+            if len(out) >= top_n:
+                break
+            if not pool_copy:
+                break
+            out.append(pool_copy.pop())
+
+    return out
 
 
 @app.on_event("startup")
 def startup():
-    # this runs when the API starts
+    """Create tables and seed initial data."""
     init_db()
     seed()
 
 
+# ----------------------------
+# Pydantic request models
+# ----------------------------
+
 class UserCreate(BaseModel):
-    # this model defines what the onboarding form sends
-    username: str
-    city: str
-    tags: List[str]
-    favorite_artists: List[str]
+    """Payload from onboarding form."""
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(..., min_length=1, max_length=100)
+    city: str = Field(..., min_length=1, max_length=100)
+    tags: List[str] = Field(default_factory=list)
+    favorite_artists: List[str] = Field(default_factory=list)
 
 
 class EventCreate(BaseModel):
-    # this model defines what the admin form sends
-    title: str
-    city: str
-    date: str
-    language: str
-    tags: List[str]
-    artists: List[str]
+    """Payload from admin add-event form."""
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(..., min_length=1, max_length=200)
+    city: str = Field(..., min_length=1, max_length=100)
+    date: date
+    language: str = Field(..., min_length=1, max_length=50)
+    tags: List[str] = Field(default_factory=list)
+    artists: List[str] = Field(default_factory=list)
 
 
-@app.get("/tag-options")
-def get_tag_options():
-    # this endpoint returns available tags for dropdowns/checkboxes
-    return {"tags": TAG_OPTIONS}
+class WeightsUpdate(BaseModel):
+    """Payload to update weights from frontend sliders."""
+    model_config = ConfigDict(extra="forbid")
+    w_cbf: float = Field(..., ge=0.0, le=1.0)
+    w_context: float = Field(..., ge=0.0, le=1.0)
+    max_artist_boost: float = Field(..., ge=0.0, le=1.0)
+    w_language: float = Field(..., ge=0.0, le=1.0)
 
 
-@app.get("/artist-options")
-def get_artist_options():
-    # this endpoint returns unique artists from current events (sorted)
-    db = SessionLocal()
-    try:
-        events = db.query(Event).all()
-        artists = set()
-        for ev in events:
-            for a in parse_csv(ev.artists):
+# ----------------------------
+# Dynamic options (DB-driven UI)
+# ----------------------------
+
+@app.get("/options")
+def get_dynamic_options(db=Depends(get_db)):
+    """
+    Return cities/tags/artists that are currently present in the DB.
+    Frontend uses this so dropdowns reflect real data only.
+    """
+    events = db.query(Event).all()
+
+    tags = set()
+    artists = set()
+    cities = set()
+    languages = set()
+
+    for ev in events:
+        cities.add(ev.city)
+        languages.add((ev.language or "").strip().lower())
+        for t in ev.get_tags():
+            if t:
+                tags.add(t)
+        for a in ev.get_artists():
+            if a:
                 artists.add(a)
-        return {"artists": sorted(artists, key=lambda x: x.lower())}
-    finally:
-        db.close()
+
+    # used by UI to hide Greek-only genres when English is selected
+    greek_only_tags = {"laiko", "entehno", "rebetiko", "greek_pop", "greek_rock", "lang_greek"}
+    english_only_tags = {"lang_english"}
+
+    return {
+        "cities": sorted(cities, key=lambda x: x.lower()),
+        "tags": sorted(tags, key=lambda x: x.lower()),
+        "artists": sorted(artists, key=lambda x: x.lower()),
+        "tag_groups": {"greek_only": sorted(greek_only_tags), "english_only": sorted(english_only_tags)},
+        "languages_present": sorted(languages),
+    }
 
 
-@app.post("/admin/add-event")
-def add_event(ev: EventCreate):
-    # this endpoint stores a new event in db
-    db = SessionLocal()
+# ----------------------------
+# Weights endpoints
+# ----------------------------
+
+@app.get("/config/weights")
+def get_weights(db=Depends(get_db)):
+    """Return current persisted weights."""
+    cfg = _get_cfg(db)
+    return {
+        "w_cbf": float(cfg.w_cbf),
+        "w_context": float(cfg.w_context),
+        "max_artist_boost": float(cfg.max_artist_boost),
+        "w_language": float(cfg.w_language),
+    }
+
+
+@app.put("/config/weights")
+def set_weights(payload: WeightsUpdate, db=Depends(get_db)):
+    """Update weights. Enforces w_cbf + w_context = 1.0."""
+    if abs((payload.w_cbf + payload.w_context) - 1.0) > 1e-6:
+        raise HTTPException(status_code=400, detail="w_cbf + w_context must equal 1.0")
+
+    cfg = _get_cfg(db)
+    cfg.w_cbf = str(payload.w_cbf)
+    cfg.w_context = str(payload.w_context)
+    cfg.max_artist_boost = str(payload.max_artist_boost)
+    cfg.w_language = str(payload.w_language)
+    db.commit()
+    return {"status": "ok"}
+
+
+# ----------------------------
+# Admin endpoints
+# ----------------------------
+
+@app.post("/admin/events", status_code=status.HTTP_201_CREATED)
+def add_event(ev: EventCreate, db=Depends(get_db)):
+    """Create and persist a new event in SQLite."""
+    tags = _clean_list(ev.tags)
+    artists = _clean_list(ev.artists)
+
+    new_ev = Event(
+        title=ev.title.strip(),
+        city=ev.city.strip(),
+        date=ev.date,
+        language=ev.language.strip().lower(),
+    )
+    new_ev.set_tags(tags)
+    new_ev.set_artists(artists)
+
+    db.add(new_ev)
     try:
-        new_ev = Event(
-            title=ev.title,
-            city=ev.city,
-            date=ev.date,
-            language=ev.language,
-            tags=",".join(ev.tags),
-            artists=",".join(ev.artists),
-        )
-        db.add(new_ev)
         db.commit()
-        db.refresh(new_ev)
-        return {"status": "ok", "event_id": new_ev.id}
-    finally:
-        db.close()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Could not create event (maybe duplicate).")
+
+    db.refresh(new_ev)
+    return {"status": "ok", "event_id": new_ev.id}
 
 
-@app.post("/user/save-profile")
-def save_profile(u: UserCreate):
-    # this endpoint stores (or updates) the user profile in db
-    db = SessionLocal()
-    try:
-        profile = db.query(UserProfile).filter(UserProfile.username == u.username).first()
-        if not profile:
-            profile = UserProfile(username=u.username)
-            db.add(profile)
+@app.post("/users/profile")
+def save_profile(u: UserCreate, db=Depends(get_db)):
+    """Create or update a user profile."""
+    tags = _clean_list(u.tags)
+    fav_artists = _clean_list(u.favorite_artists)
 
-        profile.city = u.city
-        profile.tags = ",".join(u.tags)
-        profile.favorite_artists = ",".join(u.favorite_artists)
+    username = u.username.strip()
+    profile = db.query(UserProfile).filter(UserProfile.username == username).first()
+    if not profile:
+        profile = UserProfile(username=username, city=u.city.strip())
+        db.add(profile)
 
-        db.commit()
-        return {"status": "ok"}
-    finally:
-        db.close()
+    profile.city = u.city.strip()
+    profile.set_tags(tags)
+    profile.set_favorite_artists(fav_artists)
 
+    db.commit()
+    return {"status": "ok"}
+
+
+@app.get("/events")
+def list_events(db=Depends(get_db)):
+    """List all events (useful for debugging/admin verification)."""
+    events = db.query(Event).order_by(Event.date.asc()).all()
+    return {
+        "count": len(events),
+        "events": [
+            {
+                "id": e.id,
+                "title": e.title,
+                "city": e.city,
+                "date": e.date.isoformat(),
+                "language": e.language,
+                "tags": e.get_tags(),
+                "artists": e.get_artists(),
+            }
+            for e in events
+        ],
+    }
+
+
+# ----------------------------
+# Recommendations endpoint
+# ----------------------------
 
 @app.get("/recommendations")
 def recommendations(
-    username: str,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    top_n: int = 10
+    username: str = Query(..., min_length=1, max_length=100),
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    top_n: int = Query(10, ge=1, le=50),
+    mode: str = Query("hybrid", pattern="^(hybrid|baseline)$"),
+
+    # Diversification (exploration)
+    diversify: bool = Query(False),
+    random_every: int = Query(5, ge=1, le=20),
+    random_count: int = Query(1, ge=1, le=5),
+
+    db=Depends(get_db),
 ):
-    # this endpoint returns the ranked events for a user
-    db = SessionLocal()
-    try:
-        user = db.query(UserProfile).filter(UserProfile.username == username).first()
-        if not user:
-            return {"status": "error", "message": "User not found", "results": []}
+    """
+    Return ranked recommendations for a user.
 
-        user_tags = parse_csv(user.tags)
-        user_city = user.city
-        user_artists = parse_csv(user.favorite_artists)
+    - mode=baseline: CBF only (A/B test)
+    - mode=hybrid: CBF + Context + Artist boost + Language term
+    - diversify=true: interleave random events after every N ranked events
+    - logs every request to recommendation_logs
+    """
+    user = db.query(UserProfile).filter(UserProfile.username == username.strip()).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-        events = db.query(Event).all()
+    user_tags = user.get_tags()
+    user_city = user.city
+    user_artists = user.get_favorite_artists()
 
-        # filter by date first
-        eligible = [ev for ev in events if in_date_window(ev.date, date_from, date_to)]
+    cfg = _get_cfg(db)
+    w_cbf = float(cfg.w_cbf)
+    w_context = float(cfg.w_context)
+    max_artist_boost = float(cfg.max_artist_boost)
+    w_language = float(cfg.w_language)
 
-        scored = [score_event(user_tags, user_city, user_artists, ev) for ev in eligible]
-        scored.sort(key=lambda x: x["score"], reverse=True)
+    events = db.query(Event).all()
+    eligible = [ev for ev in events if in_date_window(ev.date, date_from, date_to)]
 
-        return {"status": "ok", "count": min(top_n, len(scored)), "results": scored[:top_n]}
-    finally:
-        db.close()
+    scored = [
+        score_event(
+            user_tags, user_city, user_artists, ev,
+            mode=mode,
+            w_cbf=w_cbf,
+            w_context=w_context,
+            max_artist_boost=max_artist_boost,
+            w_language=w_language,
+        )
+        for ev in eligible
+    ]
+    scored.sort(key=lambda x: x["score"], reverse=True)
+
+    if not diversify:
+        results = scored[:top_n]
+        for r in results:
+            r["is_random_insertion"] = False
+    else:
+        ranked = scored
+        # choose random pool from lower half to encourage "surprise"
+        mid = max(0, len(ranked) // 2)
+        random_pool = ranked[mid:] if len(ranked) > 10 else ranked[:]
+
+        seed_key = f"{username.strip()}|{mode}|{date_from}|{date_to}"
+        results = interleave_random(
+            ranked=ranked,
+            random_pool=random_pool,
+            top_n=top_n,
+            random_every=random_every,
+            random_count=random_count,
+            seed_key=seed_key,
+        )
+
+        top_ranked_ids = {r["id"] for r in scored[:top_n]}
+        for r in results:
+            r["is_random_insertion"] = (r["id"] not in top_ranked_ids)
+
+    # Log request (evaluation)
+    log = RecommendationLog(
+        username=username.strip(),
+        mode=mode,
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=date_to.isoformat() if date_to else None,
+        top_n=top_n,
+    )
+    log.set_weights({
+        "w_cbf": w_cbf,
+        "w_context": w_context,
+        "max_artist_boost": max_artist_boost,
+        "w_language": w_language,
+        "diversify": diversify,
+        "random_every": random_every,
+        "random_count": random_count,
+    })
+    log.set_results([{"event_id": r["id"], "score": r["score"], "random": r["is_random_insertion"]} for r in results])
+
+    db.add(log)
+    db.commit()
+
+    return {
+        "status": "ok",
+        "mode": mode,
+        "diversify": diversify,
+        "count": len(results),
+        "results": results
+    }
